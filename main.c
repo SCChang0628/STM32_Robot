@@ -2,7 +2,7 @@
 /**
   ******************************************************************************
   * @file           : main.c
-  * @brief          : Main program body (Basic dual motor PWM test)
+  * @brief          : Main program body (MPU6050 angle reading + motor PWM)
   ******************************************************************************
   */
 /* USER CODE END Header */
@@ -13,13 +13,56 @@
 #include "usart.h"
 #include "gpio.h"
 
+/* USER CODE BEGIN Includes */
+#include <math.h>
+/* USER CODE END Includes */
+
+/* USER CODE BEGIN PD */
+#define MPU6050_ADDR         (0x68 << 1)
+#define SMPLRT_DIV_REG       0x19
+#define PWR_MGMT_1_REG       0x6B
+#define WHO_AM_I_REG         0x75
+#define ACCEL_XOUT_H_REG     0x3B
+/* USER CODE END PD */
+
 /* USER CODE BEGIN PV */
-int16_t Motor_PWM = 300;
+int16_t raw_ax, raw_az, raw_gy;
+float accel_angle, gyro_rate;
+float Current_Angle = 0.0f;
+float Gyro_Y = 0.0f;
+int16_t Motor_PWM = 250;
 /* USER CODE END PV */
 
 void SystemClock_Config(void);
 
 /* USER CODE BEGIN 0 */
+uint8_t MPU6050_Init(void)
+{
+  uint8_t check, data;
+
+  HAL_I2C_Mem_Read(&hi2c1, MPU6050_ADDR, WHO_AM_I_REG, 1, &check, 1, 1000);
+  if (check == 0x68)
+  {
+    data = 0;
+    HAL_I2C_Mem_Write(&hi2c1, MPU6050_ADDR, PWR_MGMT_1_REG, 1, &data, 1, 1000);
+    data = 0x07;
+    HAL_I2C_Mem_Write(&hi2c1, MPU6050_ADDR, SMPLRT_DIV_REG, 1, &data, 1, 1000);
+    return 0;
+  }
+
+  return 1;
+}
+
+void MPU6050_Read_Raw(int16_t *Accel_X, int16_t *Accel_Z, int16_t *Gyro_Y)
+{
+  uint8_t Rec_Data[14];
+
+  HAL_I2C_Mem_Read(&hi2c1, MPU6050_ADDR, ACCEL_XOUT_H_REG, 1, Rec_Data, 14, 1000);
+  *Accel_X = (int16_t)(Rec_Data[0] << 8 | Rec_Data[1]);
+  *Accel_Z = (int16_t)(Rec_Data[4] << 8 | Rec_Data[5]);
+  *Gyro_Y  = (int16_t)(Rec_Data[10] << 8 | Rec_Data[11]);
+}
+
 int16_t PWM_Limit(int16_t pwm)
 {
   if (pwm > 850) return 850;
@@ -74,11 +117,19 @@ int main(void)
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
   HAL_GPIO_WritePin(STBY_GPIO_Port, STBY_Pin, GPIO_PIN_SET);
+  MPU6050_Init();
 
   while (1)
   {
+    MPU6050_Read_Raw(&raw_ax, &raw_az, &raw_gy);
+
+    accel_angle = atan2((float)raw_ax, (float)raw_az) * 57.29578f;
+    gyro_rate = (float)raw_gy / 131.0f;
+    Current_Angle = 0.98f * (Current_Angle + gyro_rate * 0.005f) + 0.02f * accel_angle;
+    Gyro_Y = gyro_rate;
+
     Motor_Set(Motor_PWM, Motor_PWM);
-    HAL_Delay(10);
+    HAL_Delay(5);
   }
 }
 
@@ -98,3 +149,38 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
   RCC_OscInitStruct.PLL.PLLM = 1;
+  RCC_OscInitStruct.PLL.PLLN = 10;
+  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV7;
+  RCC_OscInitStruct.PLL.PLLQ = RCC_PLLQ_DIV2;
+  RCC_OscInitStruct.PLL.PLLR = RCC_PLLR_DIV2;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK
+                              | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+void Error_Handler(void)
+{
+  __disable_irq();
+  while (1)
+  {
+  }
+}
+
+#ifdef USE_FULL_ASSERT
+void assert_failed(uint8_t *file, uint32_t line)
+{
+}
+#endif
