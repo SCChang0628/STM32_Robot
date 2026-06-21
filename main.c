@@ -2,7 +2,7 @@
 /**
   ******************************************************************************
   * @file           : main.c
-  * @brief          : Main program body (MPU6050 angle reading + motor PWM)
+  * @brief          : Main program body (Self-balancing dual motor control)
   ******************************************************************************
   */
 /* USER CODE END Header */
@@ -30,7 +30,15 @@ int16_t raw_ax, raw_az, raw_gy;
 float accel_angle, gyro_rate;
 float Current_Angle = 0.0f;
 float Gyro_Y = 0.0f;
-int16_t Motor_PWM = 250;
+
+float Kp = 22.0f;
+float Ki = 0.0f;
+float Kd = 1.2f;
+
+float Target_Angle = 0.0f;
+float Error = 0.0f;
+float Integrated_Error = 0.0f;
+int16_t Motor_PWM = 0;
 /* USER CODE END PV */
 
 void SystemClock_Config(void);
@@ -70,6 +78,18 @@ int16_t PWM_Limit(int16_t pwm)
   return pwm;
 }
 
+int16_t Balance_PID(float Angle, float Gyro)
+{
+  Error = Angle - Target_Angle;
+  Integrated_Error += Error;
+
+  if (Integrated_Error > 2000) Integrated_Error = 2000;
+  if (Integrated_Error < -2000) Integrated_Error = -2000;
+
+  float pwm_out = (Kp * Error) + (Ki * Integrated_Error) + (Kd * Gyro);
+  return (int16_t)pwm_out;
+}
+
 void Motor_Set(int16_t left_pwm, int16_t right_pwm)
 {
   left_pwm = PWM_Limit(left_pwm);
@@ -77,28 +97,40 @@ void Motor_Set(int16_t left_pwm, int16_t right_pwm)
 
   if (left_pwm >= 0)
   {
+    int16_t final_pwm = left_pwm + 80;
+    if (final_pwm > 850) final_pwm = 850;
+
     HAL_GPIO_WritePin(AIN1_GPIO_Port, AIN1_Pin, GPIO_PIN_SET);
     HAL_GPIO_WritePin(AIN2_GPIO_Port, AIN2_Pin, GPIO_PIN_RESET);
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, left_pwm);
+    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, final_pwm);
   }
   else
   {
+    int16_t final_pwm = -left_pwm + 80;
+    if (final_pwm > 850) final_pwm = 850;
+
     HAL_GPIO_WritePin(AIN1_GPIO_Port, AIN1_Pin, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(AIN2_GPIO_Port, AIN2_Pin, GPIO_PIN_SET);
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, -left_pwm);
+    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, final_pwm);
   }
 
   if (right_pwm >= 0)
   {
+    int16_t final_pwm = right_pwm + 80;
+    if (final_pwm > 850) final_pwm = 850;
+
     HAL_GPIO_WritePin(BIN1_GPIO_Port, BIN1_Pin, GPIO_PIN_SET);
     HAL_GPIO_WritePin(BIN2_GPIO_Port, BIN2_Pin, GPIO_PIN_RESET);
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, right_pwm);
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, final_pwm);
   }
   else
   {
+    int16_t final_pwm = -right_pwm + 80;
+    if (final_pwm > 850) final_pwm = 850;
+
     HAL_GPIO_WritePin(BIN1_GPIO_Port, BIN1_Pin, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(BIN2_GPIO_Port, BIN2_Pin, GPIO_PIN_SET);
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, -right_pwm);
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, final_pwm);
   }
 }
 /* USER CODE END 0 */
@@ -128,7 +160,18 @@ int main(void)
     Current_Angle = 0.98f * (Current_Angle + gyro_rate * 0.005f) + 0.02f * accel_angle;
     Gyro_Y = gyro_rate;
 
-    Motor_Set(Motor_PWM, Motor_PWM);
+    if (Current_Angle > 45.0f || Current_Angle < -45.0f)
+    {
+      __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);
+      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 0);
+      Integrated_Error = 0;
+    }
+    else
+    {
+      Motor_PWM = Balance_PID(Current_Angle, Gyro_Y);
+      Motor_Set(Motor_PWM, Motor_PWM);
+    }
+
     HAL_Delay(5);
   }
 }
