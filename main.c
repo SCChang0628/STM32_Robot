@@ -2,7 +2,7 @@
 /**
   ******************************************************************************
   * @file           : main.c
-  * @brief          : Main program body (Self-balancing dual motor control)
+  * @brief          : Main program body (Self-balancing forward tracking car)
   ******************************************************************************
   */
 /* USER CODE END Header */
@@ -39,6 +39,12 @@ float Target_Angle = 0.0f;
 float Error = 0.0f;
 float Integrated_Error = 0.0f;
 int16_t Motor_PWM = 0;
+
+int16_t Forward_Speed = 200;
+float K_Track = 200.0f;
+int16_t Turn_Value = 0;
+
+float Left_Motor_Scale = 1.00f;
 /* USER CODE END PV */
 
 void SystemClock_Config(void);
@@ -88,6 +94,23 @@ int16_t Balance_PID(float Angle, float Gyro)
 
   float pwm_out = (Kp * Error) + (Ki * Integrated_Error) + (Kd * Gyro);
   return (int16_t)pwm_out;
+}
+
+int16_t Track_Control(void)
+{
+  uint8_t Left_Sensor = HAL_GPIO_ReadPin(TRACK_LEFT_GPIO_Port, TRACK_LEFT_Pin);
+  uint8_t Right_Sensor = HAL_GPIO_ReadPin(TRACK_RIGHT_GPIO_Port, TRACK_RIGHT_Pin);
+
+  if (Left_Sensor == 0 && Right_Sensor == 1)
+  {
+    return K_Track;
+  }
+  else if (Left_Sensor == 1 && Right_Sensor == 0)
+  {
+    return -K_Track;
+  }
+
+  return 0;
 }
 
 void Motor_Set(int16_t left_pwm, int16_t right_pwm)
@@ -160,6 +183,8 @@ int main(void)
     Current_Angle = 0.98f * (Current_Angle + gyro_rate * 0.005f) + 0.02f * accel_angle;
     Gyro_Y = gyro_rate;
 
+    Turn_Value = Track_Control();
+
     if (Current_Angle > 45.0f || Current_Angle < -45.0f)
     {
       __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);
@@ -169,7 +194,12 @@ int main(void)
     else
     {
       Motor_PWM = Balance_PID(Current_Angle, Gyro_Y);
-      Motor_Set(Motor_PWM, Motor_PWM);
+
+      int16_t Left_Motor_PWM = Motor_PWM - Forward_Speed + Turn_Value;
+      int16_t Right_Motor_PWM = Motor_PWM - Forward_Speed - Turn_Value;
+
+      Right_Motor_PWM = (int16_t)(Right_Motor_PWM * Left_Motor_Scale);
+      Motor_Set(Left_Motor_PWM, Right_Motor_PWM);
     }
 
     HAL_Delay(5);
